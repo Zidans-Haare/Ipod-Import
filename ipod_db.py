@@ -252,26 +252,24 @@ class iPodDB:
     # ------------------------------------------ find playlist insert points
     def _playlist_sections(self, data):
         """Return list of dicts describing where to insert mhip records."""
-        track_end = self._mhsd_track_off + struct.unpack_from("<I", data, self._mhsd_track_off + 8)[0]
         results = []
-        pos = track_end
-
+        pos = 0
         while pos < len(data) - 8:
-            if data[pos:pos + 4] != b"mhsd":
+            idx = data.find(b"mhsd", pos)
+            if idx == -1:
                 break
-            mhsd_hdr = struct.unpack_from("<I", data, pos + 4)[0]
-            mhsd_total = struct.unpack_from("<I", data, pos + 8)[0]
-            mhsd_type = struct.unpack_from("<I", data, pos + 12)[0]
-
+            mhsd_hdr   = struct.unpack_from("<I", data, idx + 4)[0]
+            mhsd_total = struct.unpack_from("<I", data, idx + 8)[0]
+            mhsd_type  = struct.unpack_from("<I", data, idx + 12)[0]
             if mhsd_type in (2, 3):
-                mhlp_pos = pos + mhsd_hdr
+                mhlp_pos = idx + mhsd_hdr
                 if data[mhlp_pos:mhlp_pos + 4] == b"mhlp":
                     mhlp_hdr = struct.unpack_from("<I", data, mhlp_pos + 4)[0]
                     mhyp_pos = mhlp_pos + mhlp_hdr
                     if data[mhyp_pos:mhyp_pos + 4] == b"mhyp":
-                        mhyp_hdr = struct.unpack_from("<I", data, mhyp_pos + 4)[0]
+                        mhyp_hdr  = struct.unpack_from("<I", data, mhyp_pos + 4)[0]
                         mhyp_total = struct.unpack_from("<I", data, mhyp_pos + 8)[0]
-                        master = struct.unpack_from("<I", data, mhyp_pos + 20)[0]
+                        master     = struct.unpack_from("<I", data, mhyp_pos + 20)[0]
                         if master == 1:
                             mhyp_end = mhyp_pos + mhyp_total
                             last_seq = 0
@@ -288,15 +286,14 @@ class iPodDB:
                                 else:
                                     break
                             results.append(dict(
-                                mhsd_total_off=pos + 8,
+                                mhsd_total_off=idx + 8,
                                 mhyp_total_off=mhyp_pos + 8,
                                 mhyp_ch_off=mhyp_pos + 12,
                                 mhyp_tr_off=mhyp_pos + 16,
                                 insert_at=mhyp_end,
                                 last_seq=last_seq,
                             ))
-            pos += mhsd_total
-
+            pos = idx + mhsd_total
         return results
 
     # -------------------------------------------------------------- add track
