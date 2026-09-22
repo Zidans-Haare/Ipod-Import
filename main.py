@@ -331,10 +331,8 @@ class App(ctk.CTk):
     def _check_tools(self):
         yt  = downloader.check_tool("yt-dlp")
         ff  = downloader.check_tool("ffmpeg")
-        if yt and ff:
-            self._sidebar.set_tool_status("✓ yt-dlp & ffmpeg bereit", True)
-        elif yt:
-            self._sidebar.set_tool_status("✓ yt-dlp  ·  ⚠ ffmpeg fehlt (kein AAC)", False)
+        if yt:
+            self._sidebar.set_tool_status("✓ YouTube-Download bereit", True)
         else:
             self._sidebar.set_tool_status("⚠ yt-dlp nicht gefunden", False)
 
