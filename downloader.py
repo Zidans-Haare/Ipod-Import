@@ -85,18 +85,38 @@ def download_audio(url: str, out_dir: str, progress_cb=None) -> str:
     }
 
     # Find the downloaded file — check for ffmpeg-converted extension first
+    found = None
     if downloaded:
         path = downloaded[-1]
         base = os.path.splitext(path)[0]
         for ext in (".m4a", ".mp3", ".aac", ".webm", ".opus", ".ogg"):
             if os.path.exists(base + ext):
-                return base + ext, meta
-        if os.path.exists(path):
-            return path, meta
+                found = base + ext
+                break
+        if not found and os.path.exists(path):
+            found = path
 
-    # Fallback: find any audio file in out_dir
-    for f in sorted(os.listdir(out_dir)):
-        if f.endswith((".m4a", ".mp3", ".webm", ".opus", ".ogg", ".aac")):
-            return os.path.join(out_dir, f), meta
+    if not found:
+        for f in sorted(os.listdir(out_dir)):
+            if f.endswith((".m4a", ".mp3", ".webm", ".opus", ".ogg", ".aac")):
+                found = os.path.join(out_dir, f)
+                break
 
-    raise RuntimeError("Download fehlgeschlagen — keine Audiodatei gefunden.")
+    if not found:
+        raise RuntimeError("Download fehlgeschlagen — keine Audiodatei gefunden.")
+
+    # Remux DASH/fragmented M4A to standard M4A so iPod classic can play it
+    if ffmpeg_ok and found.endswith(".m4a"):
+        with open(found, "rb") as f:
+            magic = f.read(16)
+        if b"dash" in magic or b"webm" in magic:
+            import subprocess
+            tmp = found + ".ipod.m4a"
+            r = subprocess.run(
+                ["ffmpeg", "-y", "-i", found, "-c:a", "aac", "-b:a", "192k", tmp],
+                capture_output=True,
+            )
+            if r.returncode == 0 and os.path.exists(tmp):
+                os.replace(tmp, found)
+
+    return found, meta
