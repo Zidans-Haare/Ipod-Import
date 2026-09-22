@@ -1,23 +1,23 @@
-"""iPod Manager — GUI application."""
+"""iPod Manager — moderne GUI mit customtkinter."""
 
 import os
 import sys
 import threading
 import tempfile
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
 
 from ipod_db import find_ipod, ipod_name, iPodDB
 import downloader
 
+ctk.set_appearance_mode("system")
+ctk.set_default_color_theme("blue")
+
 APP_TITLE  = "iPod Manager"
-APP_WIDTH  = 900
-APP_HEIGHT = 620
-ACCENT     = "#007AFF"
-BG         = "#f5f5f7"
-SIDEBAR_BG = "#e8e8ed"
-ROW_ODD    = "#ffffff"
-ROW_EVEN   = "#f0f0f5"
+APP_WIDTH  = 960
+APP_HEIGHT = 640
 
 
 def fmt_duration(ms):
@@ -31,169 +31,193 @@ def fmt_size(b):
     return f"{b // 1000} KB"
 
 
-class App(tk.Tk):
+class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
         self.geometry(f"{APP_WIDTH}x{APP_HEIGHT}")
-        self.resizable(True, True)
-        self.configure(bg=BG)
+        self.minsize(800, 500)
 
         self.ipod_path = None
         self.db: iPodDB | None = None
         self.tracks = []
         self._dl_thread = None
+        self._sort_col = None
+        self._sort_asc = True
 
         self._build_ui()
         self._auto_connect()
 
-    # ----------------------------------------------------------------- UI build
+    # ------------------------------------------------------------------ UI
     def _build_ui(self):
-        # ── Top bar ──────────────────────────────────────────────────────────
-        top = tk.Frame(self, bg=SIDEBAR_BG, height=44)
-        top.pack(side=tk.TOP, fill=tk.X)
-        top.pack_propagate(False)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
-        self._lbl_status = tk.Label(top, text="Kein iPod verbunden",
-                                    bg=SIDEBAR_BG, fg="#555",
-                                    font=("Helvetica", 13, "bold"))
-        self._lbl_status.pack(side=tk.LEFT, padx=16, pady=10)
+        # ── Top bar ──────────────────────────────────────────────────────
+        top = ctk.CTkFrame(self, height=56, corner_radius=0)
+        top.grid(row=0, column=0, columnspan=2, sticky="ew")
+        top.grid_columnconfigure(1, weight=1)
+        top.grid_propagate(False)
 
-        self._btn_refresh = tk.Button(top, text="⟳ Aktualisieren",
-                                      command=self._reload,
-                                      bg=ACCENT, fg="white",
-                                      relief=tk.FLAT, padx=10, pady=4,
-                                      cursor="hand2",
-                                      font=("Helvetica", 11))
-        self._btn_refresh.pack(side=tk.RIGHT, padx=8, pady=8)
+        self._lbl_status = ctk.CTkLabel(
+            top, text="Kein iPod verbunden",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w")
+        self._lbl_status.grid(row=0, column=0, padx=18, pady=14, sticky="w")
 
-        self._btn_eject = tk.Button(top, text="⏏ Auswerfen",
-                                    command=self._eject,
-                                    bg="#555", fg="white",
-                                    relief=tk.FLAT, padx=10, pady=4,
-                                    cursor="hand2",
-                                    font=("Helvetica", 11))
-        self._btn_eject.pack(side=tk.RIGHT, padx=4, pady=8)
+        btn_frame = ctk.CTkFrame(top, fg_color="transparent")
+        btn_frame.grid(row=0, column=2, padx=12, pady=8, sticky="e")
 
-        # ── Main area: left track list + right panel ──────────────────────
-        body = tk.Frame(self, bg=BG)
-        body.pack(fill=tk.BOTH, expand=True)
+        ctk.CTkButton(btn_frame, text="⟳  Aktualisieren", width=140,
+                      command=self._reload).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(btn_frame, text="⏏  Auswerfen", width=130,
+                      fg_color="gray40", hover_color="gray30",
+                      command=self._eject).pack(side="right")
 
-        # Left: track list
-        left = tk.Frame(body, bg=BG)
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 4), pady=8)
+        # ── Sidebar (links) ───────────────────────────────────────────────
+        sidebar = ctk.CTkFrame(self, width=230, corner_radius=0)
+        sidebar.grid(row=1, column=0, sticky="nsew")
+        sidebar.grid_rowconfigure(10, weight=1)
+        sidebar.grid_propagate(False)
 
-        self._lbl_count = tk.Label(left, text="Tracks (0)",
-                                   bg=BG, fg="#333",
-                                   font=("Helvetica", 12))
-        self._lbl_count.pack(anchor=tk.W, pady=(0, 4))
+        pad = dict(padx=14, pady=4, sticky="ew")
+
+        # Datei hinzufügen
+        ctk.CTkLabel(sidebar, text="MUSIK HINZUFÜGEN",
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="gray60").grid(row=0, column=0, padx=14, pady=(18, 4), sticky="w")
+
+        ctk.CTkButton(sidebar, text="📁  Datei wählen…",
+                      command=self._add_file).grid(row=1, column=0, **pad)
+
+        ctk.CTkLabel(sidebar, text="YOUTUBE IMPORT",
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="gray60").grid(row=2, column=0, padx=14, pady=(18, 4), sticky="w")
+
+        ctk.CTkLabel(sidebar, text="YouTube URL:",
+                     font=ctk.CTkFont(size=12),
+                     anchor="w").grid(row=3, column=0, padx=14, sticky="w")
+
+        self._yt_url = ctk.CTkEntry(sidebar, placeholder_text="https://youtube.com/watch?v=…")
+        self._yt_url.grid(row=4, column=0, **pad)
+
+        ctk.CTkButton(sidebar, text="▶  Herunterladen & laden",
+                      fg_color="#27ae60", hover_color="#219653",
+                      command=self._download_yt).grid(row=5, column=0, **pad)
+
+        self._lbl_tools = ctk.CTkLabel(sidebar, text="",
+                                       font=ctk.CTkFont(size=11),
+                                       text_color="gray50",
+                                       wraplength=200, justify="left", anchor="w")
+        self._lbl_tools.grid(row=6, column=0, padx=14, pady=(2, 0), sticky="w")
+        self._check_tools()
+
+        ctk.CTkLabel(sidebar, text="AUSWAHL",
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="gray60").grid(row=7, column=0, padx=14, pady=(18, 4), sticky="w")
+
+        ctk.CTkButton(sidebar, text="🗑  Track löschen",
+                      fg_color="#c0392b", hover_color="#962d22",
+                      command=self._remove_selected).grid(row=8, column=0, **pad)
+
+        # ── Haupt-Bereich (rechts) ────────────────────────────────────────
+        main = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        main.grid(row=1, column=1, sticky="nsew", padx=0, pady=0)
+        main.grid_columnconfigure(0, weight=1)
+        main.grid_rowconfigure(1, weight=1)
+
+        # Suchleiste + Track-Zähler
+        search_row = ctk.CTkFrame(main, fg_color="transparent")
+        search_row.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
+        search_row.grid_columnconfigure(1, weight=1)
+
+        self._lbl_count = ctk.CTkLabel(search_row, text="Tracks (0)",
+                                       font=ctk.CTkFont(size=13, weight="bold"),
+                                       anchor="w")
+        self._lbl_count.grid(row=0, column=0, padx=(0, 12), sticky="w")
+
+        self._search_var = tk.StringVar()
+        self._search_var.trace_add("write", lambda *_: self._filter_table())
+        self._search_entry = ctk.CTkEntry(search_row, textvariable=self._search_var,
+                                          placeholder_text="🔍  Suchen…", width=220)
+        self._search_entry.grid(row=0, column=1, sticky="e")
+
+        # Track-Tabelle via ttk.Treeview (customtkinter hat noch keine)
+        import tkinter.ttk as ttk
+        style = ttk.Style()
+        style.theme_use("default")
+        bg = self._get_bg_color()
+        fg = "#ffffff" if ctk.get_appearance_mode() == "Dark" else "#111111"
+        sel_bg = "#1f6aa5"
+        style.configure("iPod.Treeview",
+                         background=bg, foreground=fg,
+                         fieldbackground=bg,
+                         rowheight=28, font=("Helvetica", 12),
+                         borderwidth=0, relief="flat")
+        style.configure("iPod.Treeview.Heading",
+                         font=("Helvetica", 12, "bold"),
+                         background=bg, foreground=fg,
+                         relief="flat", borderwidth=0)
+        style.map("iPod.Treeview",
+                  background=[("selected", sel_bg)],
+                  foreground=[("selected", "#ffffff")])
+        style.layout("iPod.Treeview", [("iPod.Treeview.treearea", {"sticky": "nswe"})])
+
+        tree_frame = ctk.CTkFrame(main, corner_radius=8)
+        tree_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 0))
+        tree_frame.grid_columnconfigure(0, weight=1)
+        tree_frame.grid_rowconfigure(0, weight=1)
 
         cols = ("Titel", "Künstler", "Album", "Dauer", "Größe")
-        self._tree = ttk.Treeview(left, columns=cols, show="headings",
-                                   selectmode="browse")
-        widths = (260, 160, 160, 60, 70)
+        self._tree = ttk.Treeview(tree_frame, columns=cols, show="headings",
+                                   selectmode="browse", style="iPod.Treeview")
+        widths = (300, 180, 180, 70, 80)
         for col, w in zip(cols, widths):
             self._tree.heading(col, text=col,
                                command=lambda c=col: self._sort_by(c))
             self._tree.column(col, width=w, minwidth=40)
 
-        vsb = ttk.Scrollbar(left, orient=tk.VERTICAL, command=self._tree.yview)
+        vsb = ctk.CTkScrollbar(tree_frame, command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._tree.tag_configure("odd",  background=ROW_ODD)
-        self._tree.tag_configure("even", background=ROW_EVEN)
+        vsb.grid(row=0, column=1, sticky="ns")
+        self._tree.grid(row=0, column=0, sticky="nsew")
 
-        # Right: actions panel (fixed width)
-        right = tk.Frame(body, bg=SIDEBAR_BG, width=220)
-        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 12), pady=8)
-        right.pack_propagate(False)
+        # ── Statusleiste (unten) ──────────────────────────────────────────
+        bot = ctk.CTkFrame(self, height=38, corner_radius=0)
+        bot.grid(row=2, column=0, columnspan=2, sticky="ew")
+        bot.grid_columnconfigure(1, weight=1)
+        bot.grid_propagate(False)
 
-        self._build_actions(right)
+        self._pb = ctk.CTkProgressBar(bot, width=200, height=12)
+        self._pb.set(0)
+        self._pb.grid(row=0, column=0, padx=14, pady=12)
 
-        # ── Bottom: progress bar + status ────────────────────────────────
-        bot = tk.Frame(self, bg=SIDEBAR_BG, height=36)
-        bot.pack(side=tk.BOTTOM, fill=tk.X)
-        bot.pack_propagate(False)
+        self._lbl_progress = ctk.CTkLabel(bot, text="",
+                                          font=ctk.CTkFont(size=11),
+                                          anchor="w")
+        self._lbl_progress.grid(row=0, column=1, padx=6, sticky="w")
 
-        self._pb = ttk.Progressbar(bot, length=220, mode="determinate")
-        self._pb.pack(side=tk.LEFT, padx=12, pady=8)
+    def _get_bg_color(self):
+        mode = ctk.get_appearance_mode()
+        return "#2b2b2b" if mode == "Dark" else "#f0f0f0"
 
-        self._lbl_progress = tk.Label(bot, text="",
-                                      bg=SIDEBAR_BG, fg="#555",
-                                      font=("Helvetica", 10))
-        self._lbl_progress.pack(side=tk.LEFT, padx=6)
-
-    def _build_actions(self, parent):
-        pad = dict(padx=10, pady=5, fill=tk.X)
-
-        tk.Label(parent, text="Musik hinzufügen",
-                 bg=SIDEBAR_BG, fg="#222",
-                 font=("Helvetica", 12, "bold")).pack(anchor=tk.W, **pad)
-
-        tk.Button(parent, text="📁  Datei wählen…",
-                  command=self._add_file,
-                  bg=ACCENT, fg="white", relief=tk.FLAT,
-                  padx=8, pady=6, cursor="hand2",
-                  font=("Helvetica", 11)).pack(**pad)
-
-        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
-
-        tk.Label(parent, text="Track entfernen",
-                 bg=SIDEBAR_BG, fg="#222",
-                 font=("Helvetica", 12, "bold")).pack(anchor=tk.W, **pad)
-
-        tk.Button(parent, text="🗑  Auswahl löschen",
-                  command=self._remove_selected,
-                  bg="#e74c3c", fg="white", relief=tk.FLAT,
-                  padx=8, pady=6, cursor="hand2",
-                  font=("Helvetica", 11)).pack(**pad)
-
-        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
-
-        tk.Label(parent, text="YouTube Import",
-                 bg=SIDEBAR_BG, fg="#222",
-                 font=("Helvetica", 12, "bold")).pack(anchor=tk.W, **pad)
-
-        tk.Label(parent, text="YouTube URL:",
-                 bg=SIDEBAR_BG, fg="#444",
-                 font=("Helvetica", 10)).pack(anchor=tk.W, padx=10)
-
-        self._yt_url = tk.Entry(parent, font=("Helvetica", 10))
-        self._yt_url.pack(**pad)
-        self._yt_url.insert(0, "https://youtube.com/watch?v=…")
-        self._yt_url.bind("<FocusIn>", self._clear_placeholder)
-
-        tk.Button(parent, text="▶  Herunterladen & laden",
-                  command=self._download_yt,
-                  bg="#27ae60", fg="white", relief=tk.FLAT,
-                  padx=8, pady=6, cursor="hand2",
-                  font=("Helvetica", 11)).pack(**pad)
-
-        # Tool-check label
-        self._lbl_tools = tk.Label(parent, text="", bg=SIDEBAR_BG,
-                                   fg="#888", font=("Helvetica", 9),
-                                   wraplength=200, justify=tk.LEFT)
-        self._lbl_tools.pack(anchor=tk.W, padx=10, pady=(4, 0))
-        self._check_tools()
-
-    # ----------------------------------------------------------------- tool check
+    # ---------------------------------------------------------------- tools
     def _check_tools(self):
         msgs = []
         if not downloader.check_tool("yt-dlp"):
-            msgs.append("⚠ yt-dlp nicht gefunden")
+            msgs.append("⚠ yt-dlp fehlt")
         if not downloader.check_tool("ffmpeg"):
-            msgs.append("⚠ ffmpeg nicht gefunden")
-        self._lbl_tools.config(
+            msgs.append("⚠ ffmpeg fehlt")
+        self._lbl_tools.configure(
             text="\n".join(msgs) if msgs else "✓ yt-dlp & ffmpeg bereit")
 
-    # ----------------------------------------------------------------- connect
+    # --------------------------------------------------------------- connect
     def _auto_connect(self):
         path = find_ipod()
         if path:
             self._connect(path)
         else:
-            self._lbl_status.config(text="Kein iPod verbunden — USB anschließen")
+            self._lbl_status.configure(text="Kein iPod verbunden — USB anschließen")
 
     def _connect(self, path):
         try:
@@ -203,7 +227,7 @@ class App(tk.Tk):
             self.ipod_path = path
             name = ipod_name(path)
             free = db.free_space_gb()
-            self._lbl_status.config(
+            self._lbl_status.configure(
                 text=f"🎵  {name}  —  {len(self.tracks)} Tracks  |  {free:.1f} GB frei")
             self._populate_table()
         except Exception as e:
@@ -217,14 +241,15 @@ class App(tk.Tk):
         else:
             self.ipod_path = None
             self.db = None
-            self._lbl_status.config(text="Kein iPod verbunden")
+            self._lbl_status.configure(text="Kein iPod verbunden")
             self._populate_table()
             self._auto_connect()
 
-    # ----------------------------------------------------------------- table
-    def _populate_table(self):
+    # --------------------------------------------------------------- table
+    def _populate_table(self, tracks=None):
         self._tree.delete(*self._tree.get_children())
-        for i, t in enumerate(self.tracks):
+        source = tracks if tracks is not None else self.tracks
+        for t in source:
             vals = (
                 t["title"] or "(kein Titel)",
                 t["artist"] or "—",
@@ -232,19 +257,40 @@ class App(tk.Tk):
                 fmt_duration(t["duration_ms"]),
                 fmt_size(t["file_size"]),
             )
-            tag = "odd" if i % 2 else "even"
-            self._tree.insert("", tk.END, iid=str(t["id"]), values=vals, tags=(tag,))
-        self._lbl_count.config(text=f"Tracks ({len(self.tracks)})")
+            self._tree.insert("", tk.END, iid=str(t["id"]), values=vals)
+        total = len(self.tracks)
+        shown = len(source)
+        if shown < total:
+            self._lbl_count.configure(text=f"Tracks ({shown} von {total})")
+        else:
+            self._lbl_count.configure(text=f"Tracks ({total})")
+
+    def _filter_table(self):
+        q = self._search_var.get().lower().strip()
+        if not q:
+            self._populate_table()
+            return
+        filtered = [t for t in self.tracks if
+                    q in (t["title"] or "").lower() or
+                    q in (t["artist"] or "").lower() or
+                    q in (t["album"] or "").lower()]
+        self._populate_table(filtered)
 
     def _sort_by(self, col):
         key_map = {"Titel": "title", "Künstler": "artist",
                    "Album": "album", "Dauer": "duration_ms", "Größe": "file_size"}
         key = key_map.get(col, "title")
-        self.tracks.sort(key=lambda t: (t[key] or "").lower()
-                         if isinstance(t[key], str) else t[key])
-        self._populate_table()
+        if self._sort_col == col:
+            self._sort_asc = not self._sort_asc
+        else:
+            self._sort_asc = True
+            self._sort_col = col
+        self.tracks.sort(
+            key=lambda t: (t[key] or "").lower() if isinstance(t[key], str) else t[key],
+            reverse=not self._sort_asc)
+        self._filter_table()
 
-    # ----------------------------------------------------------------- actions
+    # --------------------------------------------------------------- actions
     def _add_file(self):
         if not self._check_connected():
             return
@@ -261,13 +307,13 @@ class App(tk.Tk):
         try:
             track = self.db.add_track(path, progress_cb=self._progress)
             self.tracks = self.db.load()
-            self.after(0, self._populate_table)
-            self.after(0, lambda: self._lbl_status.config(
+            self.after(0, self._filter_table)
+            self.after(0, lambda: self._lbl_status.configure(
                 text=f"✓ '{track['title'][:40]}' hinzugefügt  —  {len(self.tracks)} Tracks"))
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Fehler", str(e)))
         finally:
-            self.after(0, lambda: self._pb.config(value=0))
+            self.after(0, lambda: self._pb.set(0))
 
     def _remove_selected(self):
         if not self._check_connected():
@@ -287,107 +333,83 @@ class App(tk.Tk):
         try:
             self.db.remove_track(track_id, progress_cb=self._progress)
             self.tracks = self.db.load()
-            self.after(0, self._populate_table)
-            self.after(0, lambda: self._lbl_status.config(
+            self.after(0, self._filter_table)
+            self.after(0, lambda: self._lbl_status.configure(
                 text=f"Track gelöscht — {len(self.tracks)} Tracks verbleiben"))
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Fehler", str(e)))
         finally:
-            self.after(0, lambda: self._pb.config(value=0))
+            self.after(0, lambda: self._pb.set(0))
 
     def _download_yt(self):
         if not self._check_connected():
             return
         url = self._yt_url.get().strip()
-        if not url or url.startswith("https://youtube.com/watch?v=…"):
-            messagebox.showwarning("URL fehlt", "Bitte eine YouTube-URL eingeben.")
+        if not url or "youtube" not in url.lower() and "youtu.be" not in url.lower():
+            messagebox.showwarning("URL fehlt", "Bitte eine gültige YouTube-URL eingeben.")
             return
         if self._dl_thread and self._dl_thread.is_alive():
-            messagebox.showinfo("Läuft bereits",
-                                "Ein Download läuft bereits — bitte warten.")
+            messagebox.showinfo("Läuft bereits", "Ein Download läuft bereits — bitte warten.")
             return
         self._run_in_thread(self._do_download, url)
 
     def _do_download(self, url):
         tmpdir = tempfile.mkdtemp(prefix="ipod_dl_")
         try:
-            self._progress("Hole Video-Info…", 3)
-            audio_path = downloader.download_audio(
-                url, tmpdir, progress_cb=self._progress)
-            self._progress("Füge zur Bibliothek hinzu…", 88)
+            self._progress("Hole Video-Info…", 0.03)
+            audio_path = downloader.download_audio(url, tmpdir, progress_cb=self._progress)
+            self._progress("Füge zur Bibliothek hinzu…", 0.88)
             track = self.db.add_track(audio_path, progress_cb=None)
             self.tracks = self.db.load()
-            self.after(0, self._populate_table)
-            self.after(0, lambda: self._lbl_status.config(
+            self.after(0, self._filter_table)
+            self.after(0, lambda: self._lbl_status.configure(
                 text=f"✓ '{track['title'][:40]}' hinzugefügt"))
+            self.after(0, lambda: self._yt_url.delete(0, tk.END))
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror(
-                "Download-Fehler", str(e)))
+            self.after(0, lambda: messagebox.showerror("Download-Fehler", str(e)))
         finally:
-            # Clean up temp dir
             import shutil
-            try:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-            except Exception:
-                pass
-            self.after(0, lambda: self._pb.config(value=0))
-            self.after(0, lambda: self._lbl_progress.config(text=""))
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            self.after(0, lambda: self._pb.set(0))
+            self.after(0, lambda: self._lbl_progress.configure(text=""))
 
-    # ----------------------------------------------------------------- helpers
+    # --------------------------------------------------------------- helpers
     def _check_connected(self):
         if not self.db:
-            messagebox.showwarning("Kein iPod",
-                                   "Bitte zuerst den iPod anschließen.")
+            messagebox.showwarning("Kein iPod", "Bitte zuerst den iPod anschließen.")
             return False
         return True
 
     def _progress(self, msg, pct):
-        self.after(0, lambda: self._pb.config(value=pct))
-        self.after(0, lambda: self._lbl_progress.config(text=msg))
+        self.after(0, lambda: self._pb.set(pct / 100 if pct > 1 else pct))
+        self.after(0, lambda: self._lbl_progress.configure(text=msg))
 
     def _run_in_thread(self, fn, *args):
         t = threading.Thread(target=fn, args=args, daemon=True)
         t.start()
         self._dl_thread = t
 
-    def _clear_placeholder(self, event):
-        if self._yt_url.get().startswith("https://youtube.com/watch?v=…"):
-            self._yt_url.delete(0, tk.END)
-
     def _eject(self):
         if not self.ipod_path:
             return
         try:
-            import subprocess, sys
+            import subprocess
             if sys.platform == "darwin":
                 subprocess.run(["diskutil", "eject", self.ipod_path],
                                check=True, capture_output=True)
             elif sys.platform == "win32":
-                messagebox.showinfo(
-                    "iPod auswerfen",
+                messagebox.showinfo("iPod auswerfen",
                     "Bitte den iPod über 'Sicher entfernen' in der Taskleiste auswerfen.")
                 return
             self.ipod_path = None
             self.db = None
             self.tracks = []
             self._populate_table()
-            self._lbl_status.config(text="iPod ausgeworfen — kann sicher getrennt werden")
+            self._lbl_status.configure(text="iPod ausgeworfen ✓")
         except Exception as e:
             messagebox.showerror("Fehler beim Auswerfen", str(e))
 
 
 if __name__ == "__main__":
-    # Apply a clean ttk style
     app = App()
-    style = ttk.Style(app)
-    try:
-        style.theme_use("aqua")   # macOS native
-    except tk.TclError:
-        try:
-            style.theme_use("clam")  # Linux / Windows fallback
-        except tk.TclError:
-            pass
-
-    style.configure("Treeview", rowheight=24, font=("Helvetica", 11))
-    style.configure("Treeview.Heading", font=("Helvetica", 11, "bold"))
     app.mainloop()
