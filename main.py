@@ -438,10 +438,14 @@ class App(ctk.CTk):
     def _do_download(self, url: str):
         tmpdir = tempfile.mkdtemp(prefix="ipod_dl_")
         try:
-            audio = downloader.download_audio(url, tmpdir,
-                                              progress_cb=self._progress)
+            audio, meta = downloader.download_audio(url, tmpdir,
+                                                    progress_cb=self._progress)
             self._progress("Füge zum iPod hinzu…", 0.9)
-            track = self.db.add_track(audio, progress_cb=None)
+            track = self.db.add_track(audio,
+                                      title=meta.get("title") or None,
+                                      artist=meta.get("artist") or None,
+                                      album=meta.get("album") or None,
+                                      progress_cb=None)
             self.tracks = self.db.load()
             self.after(0, lambda: self._table.load(self.tracks))
             self.after(0, lambda t=track: self._set_status(

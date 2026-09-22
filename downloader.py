@@ -73,8 +73,16 @@ def download_audio(url: str, out_dir: str, progress_cb=None) -> str:
         "noplaylist": True,
     }
 
+    info = {}
     with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.extract_info(url, download=True)
+        info = ydl.extract_info(url, download=True) or {}
+
+    # Build metadata from yt-dlp info dict (music videos often have artist/track fields)
+    meta = {
+        "title":  info.get("track")  or info.get("title", ""),
+        "artist": info.get("artist") or info.get("creator") or info.get("uploader", ""),
+        "album":  info.get("album",  ""),
+    }
 
     # Find the downloaded file — check for ffmpeg-converted extension first
     if downloaded:
@@ -82,13 +90,13 @@ def download_audio(url: str, out_dir: str, progress_cb=None) -> str:
         base = os.path.splitext(path)[0]
         for ext in (".m4a", ".mp3", ".aac", ".webm", ".opus", ".ogg"):
             if os.path.exists(base + ext):
-                return base + ext
+                return base + ext, meta
         if os.path.exists(path):
-            return path
+            return path, meta
 
     # Fallback: find any audio file in out_dir
     for f in sorted(os.listdir(out_dir)):
         if f.endswith((".m4a", ".mp3", ".webm", ".opus", ".ogg", ".aac")):
-            return os.path.join(out_dir, f)
+            return os.path.join(out_dir, f), meta
 
     raise RuntimeError("Download fehlgeschlagen — keine Audiodatei gefunden.")

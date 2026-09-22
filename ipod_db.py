@@ -67,7 +67,7 @@ def _hash58_sign(db: bytearray, guid_bytes: bytes) -> None:
     mac = hashlib.sha1(outer_key + hashlib.sha1(inner).digest()).digest()
     for (s, _), orig in zip(((0x18, 8), (0x32, 20), (0x58, 20)), saved):
         db[s:s + len(orig)] = orig
-    db[0x58:0x78] = mac
+    db[0x58:0x6c] = mac
 
 
 def _get_firewire_guid(ipod_path: str) -> bytes | None:
