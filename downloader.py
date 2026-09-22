@@ -1,95 +1,94 @@
-"""YouTube audio download using yt-dlp."""
+"""YouTube audio download using yt-dlp Python API (no subprocess needed)."""
 
 import os
-import re
-import subprocess
-import tempfile
+import shutil
 
 
-def check_tool(name):
+def check_tool(name: str) -> bool:
+    if name == "yt-dlp":
+        try:
+            import yt_dlp  # noqa: F401
+            return True
+        except ImportError:
+            return shutil.which("yt-dlp") is not None
+    return shutil.which(name) is not None
+
+
+def get_video_info(url: str) -> dict:
     try:
-        subprocess.run([name, "--version"], capture_output=True, timeout=5)
-        return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+        import yt_dlp
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+            return ydl.extract_info(url, download=False) or {}
+    except ImportError:
+        raise RuntimeError("yt-dlp nicht installiert.")
 
 
-def get_video_info(url):
-    """Return dict with title/duration/uploader, or None on failure."""
-    try:
-        r = subprocess.run(
-            ["yt-dlp", "--no-playlist", "--print",
-             "%(title)s\n%(duration)s\n%(uploader)s", url],
-            capture_output=True, text=True, timeout=30,
-        )
-        if r.returncode == 0:
-            parts = r.stdout.strip().split("\n")
-            try:
-                dur = int(parts[1]) if len(parts) > 1 else 0
-            except ValueError:
-                dur = 0
-            return {
-                "title": parts[0] if parts else url,
-                "duration": dur,
-                "uploader": parts[2] if len(parts) > 2 else "",
-            }
-    except Exception:
-        pass
-    return None
+def download_audio(url: str, out_dir: str, progress_cb=None) -> str:
+    """Download best audio into out_dir. Returns path to downloaded file."""
 
-
-def download_audio(url, out_dir, progress_cb=None):
-    """Download and extract audio as m4a. Returns path to output file."""
     def _cb(msg, pct):
         if progress_cb:
             progress_cb(msg, pct)
 
-    _cb("Starte Download…", 5)
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError("yt-dlp nicht installiert. Bitte 'pip3 install yt-dlp' ausführen.")
 
-    tpl = os.path.join(out_dir, "%(title)s.%(ext)s")
-    cmd = [
-        "yt-dlp",
-        "--no-playlist",
-        "-x",
-        "--audio-format", "m4a",
-        "--audio-quality", "0",
-        "-o", tpl,
-        "--newline",
-        url,
-    ]
+    downloaded = []
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, text=True, bufsize=1)
-    output_file = None
+    def progress_hook(d):
+        if d["status"] == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            done  = d.get("downloaded_bytes", 0)
+            pct   = (done / total * 70 + 10) if total else 30
+            speed = d.get("_speed_str", "")
+            _cb(f"Lade herunter… {speed}", pct)
+        elif d["status"] == "finished":
+            downloaded.append(d["filename"])
+            _cb("Verarbeite Audio…", 85)
 
-    for line in proc.stdout:
-        line = line.strip()
-        if "[download]" in line and "%" in line:
-            m = re.search(r"(\d+\.?\d*)%", line)
-            if m:
-                pct = float(m.group(1))
-                _cb(f"Herunterladen… {pct:.0f}%", int(5 + pct * 0.75))
-        elif "Destination:" in line:
-            output_file = line.split("Destination:", 1)[-1].strip()
-            _cb("Konvertiere Audio…", 85)
+    _cb("Verbinde mit YouTube…", 5)
 
-    proc.wait()
-    if proc.returncode != 0:
-        raise RuntimeError("yt-dlp fehlgeschlagen — URL überprüfen")
+    ffmpeg_ok = shutil.which("ffmpeg") is not None
 
-    # Fall back: find newest audio file in out_dir
-    if not output_file or not os.path.exists(output_file):
-        candidates = [
-            (os.path.getmtime(os.path.join(out_dir, f)),
-             os.path.join(out_dir, f))
-            for f in os.listdir(out_dir)
-            if f.lower().endswith((".m4a", ".mp4", ".aac", ".mp3", ".webm"))
-        ]
-        if candidates:
-            output_file = sorted(candidates, reverse=True)[0][1]
+    if ffmpeg_ok:
+        fmt = "bestaudio/best"
+        postprocessors = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "m4a",
+            "preferredquality": "192",
+        }]
+    else:
+        fmt = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio"
+        postprocessors = []
 
-    if not output_file or not os.path.exists(output_file):
-        raise RuntimeError("Ausgabedatei nicht gefunden")
+    opts = {
+        "format": fmt,
+        "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
+        "postprocessors": postprocessors,
+        "progress_hooks": [progress_hook],
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+    }
 
-    _cb("Download abgeschlossen!", 100)
-    return output_file
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.extract_info(url, download=True)
+
+    # Find the downloaded file — check for ffmpeg-converted extension first
+    if downloaded:
+        path = downloaded[-1]
+        base = os.path.splitext(path)[0]
+        for ext in (".m4a", ".mp3", ".aac", ".webm", ".opus", ".ogg"):
+            if os.path.exists(base + ext):
+                return base + ext
+        if os.path.exists(path):
+            return path
+
+    # Fallback: find any audio file in out_dir
+    for f in sorted(os.listdir(out_dir)):
+        if f.endswith((".m4a", ".mp3", ".webm", ".opus", ".ogg", ".aac")):
+            return os.path.join(out_dir, f)
+
+    raise RuntimeError("Download fehlgeschlagen — keine Audiodatei gefunden.")

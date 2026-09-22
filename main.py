@@ -1,4 +1,4 @@
-"""iPod Manager — moderne GUI mit customtkinter."""
+"""iPod Manager — professionelle GUI."""
 
 import os
 import sys
@@ -6,6 +6,7 @@ import threading
 import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import tkinter.ttk as ttk
 
 import customtkinter as ctk
 
@@ -15,9 +16,7 @@ import downloader
 ctk.set_appearance_mode("system")
 ctk.set_default_color_theme("blue")
 
-APP_TITLE  = "iPod Manager"
-APP_WIDTH  = 960
-APP_HEIGHT = 640
+APP_TITLE = "iPod Manager"
 
 
 def fmt_duration(ms):
@@ -31,195 +30,324 @@ def fmt_size(b):
     return f"{b // 1000} KB"
 
 
+class Sidebar(ctk.CTkScrollableFrame):
+    """Left panel with all action controls."""
+
+    def __init__(self, master, app, **kw):
+        super().__init__(master, width=220, corner_radius=0,
+                         fg_color=("gray92", "gray14"), **kw)
+        self._app = app
+        self.grid_columnconfigure(0, weight=1)
+        self._build()
+
+    def _section(self, row, text):
+        ctk.CTkLabel(self, text=text,
+                     font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=("gray50", "gray55"),
+                     anchor="w").grid(row=row, column=0,
+                                      padx=14, pady=(16, 4), sticky="ew")
+
+    def _build(self):
+        a = self._app
+        p = dict(padx=10, pady=3, sticky="ew")
+
+        self._section(0, "  HINZUFÜGEN")
+        ctk.CTkButton(self, text="  📁  Datei laden…",
+                      anchor="w", height=36,
+                      command=a._add_file).grid(row=1, column=0, **p)
+
+        self._section(2, "  YOUTUBE")
+        self._url = ctk.CTkEntry(self, placeholder_text="YouTube-URL einfügen…",
+                                 height=34)
+        self._url.grid(row=3, column=0, **p)
+
+        self._dl_btn = ctk.CTkButton(
+            self, text="  ▶  Herunterladen",
+            anchor="w", height=36,
+            fg_color=("#27ae60", "#219653"),
+            hover_color=("#219653", "#1a7a40"),
+            command=a._download_yt)
+        self._dl_btn.grid(row=4, column=0, **p)
+
+        self._tool_lbl = ctk.CTkLabel(
+            self, text="", wraplength=190, justify="left",
+            font=ctk.CTkFont(size=11), text_color=("gray55", "gray50"), anchor="w")
+        self._tool_lbl.grid(row=5, column=0, padx=14, pady=(2, 0), sticky="ew")
+
+        self._section(6, "  AUSWAHL")
+        ctk.CTkButton(self, text="  🗑  Löschen",
+                      anchor="w", height=36,
+                      fg_color=("#c0392b", "#962d22"),
+                      hover_color=("#962d22", "#7a2419"),
+                      command=a._remove_selected).grid(row=7, column=0, **p)
+
+        # Spacer
+        ctk.CTkLabel(self, text="").grid(row=8, column=0)
+
+    @property
+    def yt_url(self):
+        return self._url.get().strip()
+
+    def clear_url(self):
+        self._url.delete(0, tk.END)
+
+    def set_tool_status(self, text, ok):
+        color = ("#27ae60", "#2ecc71") if ok else ("#e74c3c", "#c0392b")
+        self._tool_lbl.configure(text=text, text_color=color)
+
+    def set_dl_busy(self, busy: bool):
+        state = "disabled" if busy else "normal"
+        self._dl_btn.configure(state=state)
+
+
+class TrackTable(ctk.CTkFrame):
+    """The main track list with search and sortable columns."""
+
+    COLS = [
+        ("Titel",     "title",       1,  300),
+        ("Künstler",  "artist",      0,  170),
+        ("Album",     "album",       0,  170),
+        ("Dauer",     "duration_ms", 0,   68),
+        ("Größe",     "file_size",   0,   78),
+    ]
+
+    def __init__(self, master, on_select=None, **kw):
+        super().__init__(master, corner_radius=10,
+                         fg_color=("white", "gray17"), **kw)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        self._tracks: list[dict] = []
+        self._sort_col: str | None = None
+        self._sort_asc = True
+        self._on_select = on_select
+        self._query = ""
+
+        self._build()
+
+    def _build(self):
+        # Search bar
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 6))
+        bar.grid_columnconfigure(0, weight=1)
+
+        self._count_lbl = ctk.CTkLabel(bar, text="",
+                                        font=ctk.CTkFont(size=13, weight="bold"),
+                                        anchor="w")
+        self._count_lbl.grid(row=0, column=0, sticky="w")
+
+        var = tk.StringVar()
+        var.trace_add("write", lambda *_: self._on_search(var.get()))
+        ctk.CTkEntry(bar, textvariable=var,
+                     placeholder_text="🔍  Suchen…",
+                     width=200, height=30).grid(row=0, column=1, sticky="e")
+
+        # Treeview style
+        mode = ctk.get_appearance_mode()
+        bg   = "#2b2b2b" if mode == "Dark" else "#ffffff"
+        fg   = "#e0e0e0" if mode == "Dark" else "#1a1a1a"
+        hbg  = "#242424" if mode == "Dark" else "#f5f5f5"
+        sel  = "#1f6aa5"
+        abg  = "#323232" if mode == "Dark" else "#f9f9f9"
+
+        s = ttk.Style()
+        s.theme_use("default")
+        s.configure("T.Treeview",
+                    background=bg, foreground=fg, fieldbackground=bg,
+                    rowheight=30, font=("Helvetica", 12), borderwidth=0)
+        s.configure("T.Treeview.Heading",
+                    background=hbg, foreground=fg,
+                    font=("Helvetica", 11, "bold"), relief="flat", borderwidth=0)
+        s.map("T.Treeview",
+              background=[("selected", sel)],
+              foreground=[("selected", "#ffffff")])
+        s.layout("T.Treeview", [("T.Treeview.treearea", {"sticky": "nswe"})])
+
+        cols = [c[0] for c in self.COLS]
+        self._tree = ttk.Treeview(self, columns=cols, show="headings",
+                                   selectmode="browse", style="T.Treeview")
+        self._tree.tag_configure("alt", background=abg)
+
+        for label, key, stretch, w in self.COLS:
+            self._tree.heading(label, text=label,
+                               command=lambda k=key, l=label: self._sort(k, l))
+            self._tree.column(label, width=w, minwidth=50,
+                               stretch=bool(stretch))
+
+        vsb = ctk.CTkScrollbar(self, command=self._tree.yview)
+        self._tree.configure(yscrollcommand=vsb.set)
+        vsb.grid(row=1, column=1, sticky="ns", pady=(0, 10))
+        self._tree.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=(0, 10))
+
+    def load(self, tracks: list[dict]):
+        self._tracks = list(tracks)
+        self._sort_col = None
+        self._refresh()
+
+    def _refresh(self):
+        q = self._query.lower()
+        visible = [t for t in self._tracks if not q or any(
+            q in (t.get(k) or "").lower() for k in ("title", "artist", "album"))]
+
+        self._tree.delete(*self._tree.get_children())
+        for i, t in enumerate(visible):
+            vals = (
+                t["title"]  or "(kein Titel)",
+                t["artist"] or "—",
+                t["album"]  or "—",
+                fmt_duration(t["duration_ms"]),
+                fmt_size(t["file_size"]),
+            )
+            tag = ("alt",) if i % 2 else ()
+            self._tree.insert("", tk.END, iid=str(t["id"]), values=vals, tags=tag)
+
+        total = len(self._tracks)
+        shown = len(visible)
+        self._count_lbl.configure(
+            text=f"{shown} Songs" if shown == total else f"{shown} von {total} Songs")
+
+    def _on_search(self, q: str):
+        self._query = q
+        self._refresh()
+
+    def _sort(self, key: str, label: str):
+        if self._sort_col == key:
+            self._sort_asc = not self._sort_asc
+        else:
+            self._sort_asc = True
+            self._sort_col = key
+        arrow = " ↑" if self._sort_asc else " ↓"
+        for lbl, k, *_ in self.COLS:
+            self._tree.heading(lbl, text=lbl + (arrow if k == key else ""))
+        self._tracks.sort(
+            key=lambda t: (t.get(key) or "").lower() if isinstance(t.get(key), str) else (t.get(key) or 0),
+            reverse=not self._sort_asc)
+        self._refresh()
+
+    @property
+    def selected_id(self) -> int | None:
+        sel = self._tree.selection()
+        return int(sel[0]) if sel else None
+
+    @property
+    def selected_title(self) -> str:
+        sel = self._tree.selection()
+        return self._tree.item(sel[0], "values")[0] if sel else ""
+
+
+class StatusBar(ctk.CTkFrame):
+    """Bottom bar with progress and status text."""
+
+    def __init__(self, master, **kw):
+        super().__init__(master, height=42, corner_radius=0,
+                         fg_color=("gray90", "gray13"), **kw)
+        self.grid_propagate(False)
+        self.grid_columnconfigure(1, weight=1)
+
+        self._pb = ctk.CTkProgressBar(self, width=180, height=10)
+        self._pb.set(0)
+        self._pb.grid(row=0, column=0, padx=(14, 10), pady=14)
+
+        self._lbl = ctk.CTkLabel(self, text="Bereit",
+                                  font=ctk.CTkFont(size=12),
+                                  text_color=("gray40", "gray60"),
+                                  anchor="w")
+        self._lbl.grid(row=0, column=1, sticky="w")
+
+    def update(self, msg: str, pct: float):
+        self._pb.set(pct if pct <= 1 else pct / 100)
+        self._lbl.configure(text=msg)
+
+    def reset(self):
+        self._pb.set(0)
+        self._lbl.configure(text="Bereit")
+
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry(f"{APP_WIDTH}x{APP_HEIGHT}")
-        self.minsize(800, 500)
+        self.geometry("1000x660")
+        self.minsize(800, 520)
 
-        self.ipod_path = None
+        self.ipod_path: str | None = None
         self.db: iPodDB | None = None
-        self.tracks = []
-        self._dl_thread = None
-        self._sort_col = None
-        self._sort_asc = True
+        self.tracks: list[dict] = []
+        self._dl_thread: threading.Thread | None = None
 
-        self._build_ui()
-        self._auto_connect()
+        self._build()
+        self._after_init()
 
-    # ------------------------------------------------------------------ UI
-    def _build_ui(self):
+    # ------------------------------------------------------------ build
+    def _build(self):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # ── Top bar ──────────────────────────────────────────────────────
-        top = ctk.CTkFrame(self, height=56, corner_radius=0)
+        # Top bar
+        top = ctk.CTkFrame(self, height=52, corner_radius=0,
+                            fg_color=("gray88", "gray15"))
         top.grid(row=0, column=0, columnspan=2, sticky="ew")
         top.grid_columnconfigure(1, weight=1)
         top.grid_propagate(False)
 
-        self._lbl_status = ctk.CTkLabel(
+        self._dev_icon = ctk.CTkLabel(top, text="🎵",
+                                       font=ctk.CTkFont(size=20))
+        self._dev_icon.grid(row=0, column=0, padx=(16, 6), pady=10)
+
+        self._status_lbl = ctk.CTkLabel(
             top, text="Kein iPod verbunden",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            anchor="w")
-        self._lbl_status.grid(row=0, column=0, padx=18, pady=14, sticky="w")
+            font=ctk.CTkFont(size=14, weight="bold"), anchor="w")
+        self._status_lbl.grid(row=0, column=1, sticky="w", pady=10)
 
-        btn_frame = ctk.CTkFrame(top, fg_color="transparent")
-        btn_frame.grid(row=0, column=2, padx=12, pady=8, sticky="e")
+        btn_f = ctk.CTkFrame(top, fg_color="transparent")
+        btn_f.grid(row=0, column=2, padx=12, pady=8)
 
-        ctk.CTkButton(btn_frame, text="⟳  Aktualisieren", width=140,
-                      command=self._reload).pack(side="right", padx=(6, 0))
-        ctk.CTkButton(btn_frame, text="⏏  Auswerfen", width=130,
-                      fg_color="gray40", hover_color="gray30",
-                      command=self._eject).pack(side="right")
+        ctk.CTkButton(btn_f, text="⏏  Auswerfen", width=120, height=32,
+                      fg_color=("gray70", "gray30"),
+                      hover_color=("gray60", "gray25"),
+                      font=ctk.CTkFont(size=12),
+                      command=self._eject).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(btn_f, text="⟳  Aktualisieren", width=130, height=32,
+                      font=ctk.CTkFont(size=12),
+                      command=self._reload).pack(side="left")
 
-        # ── Sidebar (links) ───────────────────────────────────────────────
-        sidebar = ctk.CTkFrame(self, width=230, corner_radius=0)
-        sidebar.grid(row=1, column=0, sticky="nsew")
-        sidebar.grid_rowconfigure(10, weight=1)
-        sidebar.grid_propagate(False)
+        # Sidebar
+        self._sidebar = Sidebar(self, app=self)
+        self._sidebar.grid(row=1, column=0, sticky="nsew")
 
-        pad = dict(padx=14, pady=4, sticky="ew")
+        # Track table
+        self._table = TrackTable(self)
+        self._table.grid(row=1, column=1, sticky="nsew", padx=12, pady=12)
 
-        # Datei hinzufügen
-        ctk.CTkLabel(sidebar, text="MUSIK HINZUFÜGEN",
-                     font=ctk.CTkFont(size=11, weight="bold"),
-                     text_color="gray60").grid(row=0, column=0, padx=14, pady=(18, 4), sticky="w")
+        # Status bar
+        self._statusbar = StatusBar(self)
+        self._statusbar.grid(row=2, column=0, columnspan=2, sticky="ew")
 
-        ctk.CTkButton(sidebar, text="📁  Datei wählen…",
-                      command=self._add_file).grid(row=1, column=0, **pad)
-
-        ctk.CTkLabel(sidebar, text="YOUTUBE IMPORT",
-                     font=ctk.CTkFont(size=11, weight="bold"),
-                     text_color="gray60").grid(row=2, column=0, padx=14, pady=(18, 4), sticky="w")
-
-        ctk.CTkLabel(sidebar, text="YouTube URL:",
-                     font=ctk.CTkFont(size=12),
-                     anchor="w").grid(row=3, column=0, padx=14, sticky="w")
-
-        self._yt_url = ctk.CTkEntry(sidebar, placeholder_text="https://youtube.com/watch?v=…")
-        self._yt_url.grid(row=4, column=0, **pad)
-
-        ctk.CTkButton(sidebar, text="▶  Herunterladen & laden",
-                      fg_color="#27ae60", hover_color="#219653",
-                      command=self._download_yt).grid(row=5, column=0, **pad)
-
-        self._lbl_tools = ctk.CTkLabel(sidebar, text="",
-                                       font=ctk.CTkFont(size=11),
-                                       text_color="gray50",
-                                       wraplength=200, justify="left", anchor="w")
-        self._lbl_tools.grid(row=6, column=0, padx=14, pady=(2, 0), sticky="w")
+    def _after_init(self):
         self._check_tools()
+        self._auto_connect()
 
-        ctk.CTkLabel(sidebar, text="AUSWAHL",
-                     font=ctk.CTkFont(size=11, weight="bold"),
-                     text_color="gray60").grid(row=7, column=0, padx=14, pady=(18, 4), sticky="w")
-
-        ctk.CTkButton(sidebar, text="🗑  Track löschen",
-                      fg_color="#c0392b", hover_color="#962d22",
-                      command=self._remove_selected).grid(row=8, column=0, **pad)
-
-        # ── Haupt-Bereich (rechts) ────────────────────────────────────────
-        main = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        main.grid(row=1, column=1, sticky="nsew", padx=0, pady=0)
-        main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(1, weight=1)
-
-        # Suchleiste + Track-Zähler
-        search_row = ctk.CTkFrame(main, fg_color="transparent")
-        search_row.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
-        search_row.grid_columnconfigure(1, weight=1)
-
-        self._lbl_count = ctk.CTkLabel(search_row, text="Tracks (0)",
-                                       font=ctk.CTkFont(size=13, weight="bold"),
-                                       anchor="w")
-        self._lbl_count.grid(row=0, column=0, padx=(0, 12), sticky="w")
-
-        self._search_var = tk.StringVar()
-        self._search_var.trace_add("write", lambda *_: self._filter_table())
-        self._search_entry = ctk.CTkEntry(search_row, textvariable=self._search_var,
-                                          placeholder_text="🔍  Suchen…", width=220)
-        self._search_entry.grid(row=0, column=1, sticky="e")
-
-        # Track-Tabelle via ttk.Treeview (customtkinter hat noch keine)
-        import tkinter.ttk as ttk
-        style = ttk.Style()
-        style.theme_use("default")
-        bg = self._get_bg_color()
-        fg = "#ffffff" if ctk.get_appearance_mode() == "Dark" else "#111111"
-        sel_bg = "#1f6aa5"
-        style.configure("iPod.Treeview",
-                         background=bg, foreground=fg,
-                         fieldbackground=bg,
-                         rowheight=28, font=("Helvetica", 12),
-                         borderwidth=0, relief="flat")
-        style.configure("iPod.Treeview.Heading",
-                         font=("Helvetica", 12, "bold"),
-                         background=bg, foreground=fg,
-                         relief="flat", borderwidth=0)
-        style.map("iPod.Treeview",
-                  background=[("selected", sel_bg)],
-                  foreground=[("selected", "#ffffff")])
-        style.layout("iPod.Treeview", [("iPod.Treeview.treearea", {"sticky": "nswe"})])
-
-        tree_frame = ctk.CTkFrame(main, corner_radius=8)
-        tree_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 0))
-        tree_frame.grid_columnconfigure(0, weight=1)
-        tree_frame.grid_rowconfigure(0, weight=1)
-
-        cols = ("Titel", "Künstler", "Album", "Dauer", "Größe")
-        self._tree = ttk.Treeview(tree_frame, columns=cols, show="headings",
-                                   selectmode="browse", style="iPod.Treeview")
-        widths = (300, 180, 180, 70, 80)
-        for col, w in zip(cols, widths):
-            self._tree.heading(col, text=col,
-                               command=lambda c=col: self._sort_by(c))
-            self._tree.column(col, width=w, minwidth=40)
-
-        vsb = ctk.CTkScrollbar(tree_frame, command=self._tree.yview)
-        self._tree.configure(yscrollcommand=vsb.set)
-        vsb.grid(row=0, column=1, sticky="ns")
-        self._tree.grid(row=0, column=0, sticky="nsew")
-
-        # ── Statusleiste (unten) ──────────────────────────────────────────
-        bot = ctk.CTkFrame(self, height=38, corner_radius=0)
-        bot.grid(row=2, column=0, columnspan=2, sticky="ew")
-        bot.grid_columnconfigure(1, weight=1)
-        bot.grid_propagate(False)
-
-        self._pb = ctk.CTkProgressBar(bot, width=200, height=12)
-        self._pb.set(0)
-        self._pb.grid(row=0, column=0, padx=14, pady=12)
-
-        self._lbl_progress = ctk.CTkLabel(bot, text="",
-                                          font=ctk.CTkFont(size=11),
-                                          anchor="w")
-        self._lbl_progress.grid(row=0, column=1, padx=6, sticky="w")
-
-    def _get_bg_color(self):
-        mode = ctk.get_appearance_mode()
-        return "#2b2b2b" if mode == "Dark" else "#f0f0f0"
-
-    # ---------------------------------------------------------------- tools
+    # ---------------------------------------------------------- tools
     def _check_tools(self):
-        msgs = []
-        if not downloader.check_tool("yt-dlp"):
-            msgs.append("⚠ yt-dlp fehlt")
-        if not downloader.check_tool("ffmpeg"):
-            msgs.append("⚠ ffmpeg fehlt")
-        self._lbl_tools.configure(
-            text="\n".join(msgs) if msgs else "✓ yt-dlp & ffmpeg bereit")
+        yt  = downloader.check_tool("yt-dlp")
+        ff  = downloader.check_tool("ffmpeg")
+        if yt and ff:
+            self._sidebar.set_tool_status("✓ yt-dlp & ffmpeg bereit", True)
+        elif yt:
+            self._sidebar.set_tool_status("✓ yt-dlp  ·  ⚠ ffmpeg fehlt (kein AAC)", False)
+        else:
+            self._sidebar.set_tool_status("⚠ yt-dlp nicht gefunden", False)
 
-    # --------------------------------------------------------------- connect
+    # --------------------------------------------------------- connect
     def _auto_connect(self):
         path = find_ipod()
         if path:
             self._connect(path)
         else:
-            self._lbl_status.configure(text="Kein iPod verbunden — USB anschließen")
+            self._status_lbl.configure(text="Kein iPod verbunden — USB anschließen")
+            self._dev_icon.configure(text="🔌")
 
-    def _connect(self, path):
+    def _connect(self, path: str):
         try:
             db = iPodDB(path)
             self.tracks = db.load()
@@ -227,12 +355,13 @@ class App(ctk.CTk):
             self.ipod_path = path
             name = ipod_name(path)
             free = db.free_space_gb()
-            self._lbl_status.configure(
-                text=f"🎵  {name}  —  {len(self.tracks)} Tracks  |  {free:.1f} GB frei")
-            self._populate_table()
+            self._status_lbl.configure(
+                text=f"{name}  ·  {len(self.tracks)} Songs  ·  {free:.1f} GB frei")
+            self._dev_icon.configure(text="🎵")
+            self._table.load(self.tracks)
+            self._statusbar.reset()
         except Exception as e:
-            messagebox.showerror("Verbindungsfehler",
-                                 f"iPod konnte nicht gelesen werden:\n{e}")
+            messagebox.showerror("Fehler", f"iPod konnte nicht gelesen werden:\n{e}")
 
     def _reload(self):
         if self.ipod_path and os.path.exists(
@@ -241,150 +370,105 @@ class App(ctk.CTk):
         else:
             self.ipod_path = None
             self.db = None
-            self._lbl_status.configure(text="Kein iPod verbunden")
-            self._populate_table()
+            self.tracks = []
+            self._table.load([])
             self._auto_connect()
 
-    # --------------------------------------------------------------- table
-    def _populate_table(self, tracks=None):
-        self._tree.delete(*self._tree.get_children())
-        source = tracks if tracks is not None else self.tracks
-        for t in source:
-            vals = (
-                t["title"] or "(kein Titel)",
-                t["artist"] or "—",
-                t["album"] or "—",
-                fmt_duration(t["duration_ms"]),
-                fmt_size(t["file_size"]),
-            )
-            self._tree.insert("", tk.END, iid=str(t["id"]), values=vals)
-        total = len(self.tracks)
-        shown = len(source)
-        if shown < total:
-            self._lbl_count.configure(text=f"Tracks ({shown} von {total})")
-        else:
-            self._lbl_count.configure(text=f"Tracks ({total})")
-
-    def _filter_table(self):
-        q = self._search_var.get().lower().strip()
-        if not q:
-            self._populate_table()
-            return
-        filtered = [t for t in self.tracks if
-                    q in (t["title"] or "").lower() or
-                    q in (t["artist"] or "").lower() or
-                    q in (t["album"] or "").lower()]
-        self._populate_table(filtered)
-
-    def _sort_by(self, col):
-        key_map = {"Titel": "title", "Künstler": "artist",
-                   "Album": "album", "Dauer": "duration_ms", "Größe": "file_size"}
-        key = key_map.get(col, "title")
-        if self._sort_col == col:
-            self._sort_asc = not self._sort_asc
-        else:
-            self._sort_asc = True
-            self._sort_col = col
-        self.tracks.sort(
-            key=lambda t: (t[key] or "").lower() if isinstance(t[key], str) else t[key],
-            reverse=not self._sort_asc)
-        self._filter_table()
-
-    # --------------------------------------------------------------- actions
+    # --------------------------------------------------------- actions
     def _add_file(self):
-        if not self._check_connected():
+        if not self._need_ipod():
             return
         paths = filedialog.askopenfilenames(
             title="Audiodatei wählen",
-            filetypes=[("Audiodateien", "*.m4a *.mp3 *.aac *.mp4"),
-                       ("Alle Dateien", "*.*")])
-        if not paths:
-            return
-        for p in paths:
-            self._run_in_thread(self._do_add, p)
+            filetypes=[("Audio", "*.m4a *.mp3 *.aac *.mp4"), ("Alle", "*.*")])
+        if paths:
+            self._run(self._do_add, list(paths))
 
-    def _do_add(self, path):
-        try:
-            track = self.db.add_track(path, progress_cb=self._progress)
-            self.tracks = self.db.load()
-            self.after(0, self._filter_table)
-            self.after(0, lambda: self._lbl_status.configure(
-                text=f"✓ '{track['title'][:40]}' hinzugefügt  —  {len(self.tracks)} Tracks"))
-        except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Fehler", str(e)))
-        finally:
-            self.after(0, lambda: self._pb.set(0))
+    def _do_add(self, paths: list[str]):
+        for p in paths:
+            name = os.path.basename(p)
+            try:
+                self._progress(f"Kopiere {name}…", 0.2)
+                track = self.db.add_track(p, progress_cb=self._progress)
+                self.tracks = self.db.load()
+                self.after(0, lambda: self._table.load(self.tracks))
+                self.after(0, lambda t=track: self._set_status(
+                    f"✓  »{t['title'][:45]}« hinzugefügt  ·  {len(self.tracks)} Songs"))
+            except Exception as e:
+                self.after(0, lambda err=str(e): messagebox.showerror("Fehler", err))
+        self.after(0, lambda: self._statusbar.reset())
 
     def _remove_selected(self):
-        if not self._check_connected():
+        if not self._need_ipod():
             return
-        sel = self._tree.selection()
-        if not sel:
-            messagebox.showinfo("Hinweis", "Bitte erst einen Track auswählen.")
+        tid = self._table.selected_id
+        if tid is None:
+            messagebox.showinfo("Hinweis", "Bitte zuerst einen Song auswählen.")
             return
-        track_id = int(sel[0])
-        title = self._tree.item(sel[0], "values")[0]
-        if not messagebox.askyesno("Track löschen",
-                                   f"'{title}' wirklich vom iPod löschen?"):
-            return
-        self._run_in_thread(self._do_remove, track_id)
+        title = self._table.selected_title
+        if messagebox.askyesno("Song löschen", f"»{title}« wirklich vom iPod löschen?"):
+            self._run(self._do_remove, tid)
 
-    def _do_remove(self, track_id):
+    def _do_remove(self, tid: int):
         try:
-            self.db.remove_track(track_id, progress_cb=self._progress)
+            self.db.remove_track(tid, progress_cb=self._progress)
             self.tracks = self.db.load()
-            self.after(0, self._filter_table)
-            self.after(0, lambda: self._lbl_status.configure(
-                text=f"Track gelöscht — {len(self.tracks)} Tracks verbleiben"))
+            self.after(0, lambda: self._table.load(self.tracks))
+            self.after(0, lambda: self._set_status(
+                f"Song gelöscht  ·  {len(self.tracks)} Songs verbleiben"))
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Fehler", str(e)))
         finally:
-            self.after(0, lambda: self._pb.set(0))
+            self.after(0, self._statusbar.reset)
 
     def _download_yt(self):
-        if not self._check_connected():
+        if not self._need_ipod():
             return
-        url = self._yt_url.get().strip()
-        if not url or "youtube" not in url.lower() and "youtu.be" not in url.lower():
-            messagebox.showwarning("URL fehlt", "Bitte eine gültige YouTube-URL eingeben.")
+        url = self._sidebar.yt_url
+        if not url or ("youtube" not in url and "youtu.be" not in url):
+            messagebox.showwarning("URL fehlt",
+                                   "Bitte eine gültige YouTube-URL eingeben.")
             return
         if self._dl_thread and self._dl_thread.is_alive():
-            messagebox.showinfo("Läuft bereits", "Ein Download läuft bereits — bitte warten.")
+            messagebox.showinfo("Läuft noch", "Ein Download läuft bereits — bitte warten.")
             return
-        self._run_in_thread(self._do_download, url)
+        self._sidebar.set_dl_busy(True)
+        self._run(self._do_download, url)
 
-    def _do_download(self, url):
+    def _do_download(self, url: str):
         tmpdir = tempfile.mkdtemp(prefix="ipod_dl_")
         try:
-            self._progress("Hole Video-Info…", 0.03)
-            audio_path = downloader.download_audio(url, tmpdir, progress_cb=self._progress)
-            self._progress("Füge zur Bibliothek hinzu…", 0.88)
-            track = self.db.add_track(audio_path, progress_cb=None)
+            audio = downloader.download_audio(url, tmpdir,
+                                              progress_cb=self._progress)
+            self._progress("Füge zum iPod hinzu…", 0.9)
+            track = self.db.add_track(audio, progress_cb=None)
             self.tracks = self.db.load()
-            self.after(0, self._filter_table)
-            self.after(0, lambda: self._lbl_status.configure(
-                text=f"✓ '{track['title'][:40]}' hinzugefügt"))
-            self.after(0, lambda: self._yt_url.delete(0, tk.END))
+            self.after(0, lambda: self._table.load(self.tracks))
+            self.after(0, lambda t=track: self._set_status(
+                f"✓  »{t['title'][:45]}« heruntergeladen & hinzugefügt  ·  {len(self.tracks)} Songs"))
+            self.after(0, self._sidebar.clear_url)
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Download-Fehler", str(e)))
+            self.after(0, lambda err=str(e): messagebox.showerror("Download-Fehler", err))
         finally:
             import shutil
             shutil.rmtree(tmpdir, ignore_errors=True)
-            self.after(0, lambda: self._pb.set(0))
-            self.after(0, lambda: self._lbl_progress.configure(text=""))
+            self.after(0, self._statusbar.reset)
+            self.after(0, lambda: self._sidebar.set_dl_busy(False))
 
-    # --------------------------------------------------------------- helpers
-    def _check_connected(self):
+    # --------------------------------------------------------- helpers
+    def _need_ipod(self) -> bool:
         if not self.db:
             messagebox.showwarning("Kein iPod", "Bitte zuerst den iPod anschließen.")
             return False
         return True
 
-    def _progress(self, msg, pct):
-        self.after(0, lambda: self._pb.set(pct / 100 if pct > 1 else pct))
-        self.after(0, lambda: self._lbl_progress.configure(text=msg))
+    def _progress(self, msg: str, pct: float):
+        self.after(0, lambda: self._statusbar.update(msg, pct))
 
-    def _run_in_thread(self, fn, *args):
+    def _set_status(self, text: str):
+        self._status_lbl.configure(text=text)
+
+    def _run(self, fn, *args):
         t = threading.Thread(target=fn, args=args, daemon=True)
         t.start()
         self._dl_thread = t
@@ -397,17 +481,14 @@ class App(ctk.CTk):
             if sys.platform == "darwin":
                 subprocess.run(["diskutil", "eject", self.ipod_path],
                                check=True, capture_output=True)
-            elif sys.platform == "win32":
-                messagebox.showinfo("iPod auswerfen",
-                    "Bitte den iPod über 'Sicher entfernen' in der Taskleiste auswerfen.")
-                return
             self.ipod_path = None
             self.db = None
             self.tracks = []
-            self._populate_table()
-            self._lbl_status.configure(text="iPod ausgeworfen ✓")
+            self._table.load([])
+            self._status_lbl.configure(text="iPod ausgeworfen ✓")
+            self._dev_icon.configure(text="🔌")
         except Exception as e:
-            messagebox.showerror("Fehler beim Auswerfen", str(e))
+            messagebox.showerror("Fehler", str(e))
 
 
 if __name__ == "__main__":
