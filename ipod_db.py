@@ -212,7 +212,7 @@ class iPodDB:
                 + utf16)
 
     def _mhit(self, tid, fsize, dur_ms, brate, srate, year,
-              dbid_lo, dbid_hi, ts, mhods):
+              dbid_lo, dbid_hi, ts, mhods, is_mp3=False):
         body = b"".join(mhods)
         total = 624 + len(body)
         h = bytearray(624)
@@ -222,7 +222,7 @@ class iPodDB:
         struct.pack_into("<I", h, 12, len(mhods))
         struct.pack_into("<I", h, 16, tid)
         struct.pack_into("<I", h, 20, 1)                   # visible
-        struct.pack_into("<4s", h, 24, b" A4M")            # AAC
+        struct.pack_into("<4s", h, 24, b"3PM " if is_mp3 else b" A4M")
         struct.pack_into("<H", h, 28, 1)
         struct.pack_into("<I", h, 32, ts)
         struct.pack_into("<I", h, 36, fsize)
@@ -230,9 +230,21 @@ class iPodDB:
         struct.pack_into("<I", h, 52, year)
         struct.pack_into("<I", h, 56, brate)
         struct.pack_into("<I", h, 60, srate << 16)
+        struct.pack_into("<I", h, 92,  1)                  # disc_count flag
         struct.pack_into("<I", h, 100, ts)                 # date_added
         struct.pack_into("<I", h, 112, dbid_lo)
         struct.pack_into("<I", h, 116, dbid_hi)
+        struct.pack_into("<I", h, 164, 1)                  # media_kind = music
+        struct.pack_into("<I", h, 208, 1)                  # media flag
+        struct.pack_into("<I", h, 256, 1)                  # media flag
+        struct.pack_into("<I", h, 292, 4100818589)         # required constant
+        struct.pack_into("<I", h, 296, 3804670695)         # required constant
+        struct.pack_into("<I", h, 308, 2155905152)         # required constant
+        struct.pack_into("<H", h, 312, 32896)              # required constant
+        struct.pack_into("<I", h, 360, 1)                  # media flag
+        struct.pack_into("<I", h, 524, 2)                  # required constant
+        struct.pack_into("<I", h, 580, 16777216)           # required constant
+        struct.pack_into("<I", h, 596, 3872851678)         # required constant
         return bytes(h) + body
 
     def _mhip(self, tid, dbid_lo, dbid_hi, ts, seq):
@@ -384,7 +396,7 @@ class iPodDB:
             self._mhod(6, kind),
         ]
         new_mhit = self._mhit(new_id, fsize, dur_ms, brate, srate, year,
-                               dbid_lo, dbid_hi, ts, mhods)
+                               dbid_lo, dbid_hi, ts, mhods, is_mp3=(ext == ".mp3"))
 
         with open(self.db, "rb") as f:
             data = bytearray(f.read())
