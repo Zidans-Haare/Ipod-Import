@@ -12,11 +12,25 @@ Einfache Desktop-App zum Verwalten eines klassischen iPods (iPod Nano, Classic, 
 
 ## Installation (Mac)
 
-1. Diesen Ordner irgendwo auf dem Computer speichern
-2. `setup.command` doppelklicken — installiert alles automatisch
-3. Danach: `start.command` doppelklicken zum Starten
+### Fertiger Download (empfohlen)
 
-**Voraussetzungen:** Python 3 (von python.org), Homebrew (für ffmpeg/YouTube)
+1. `iPod_Manager_mac_v1.2.zip` herunterladen und entpacken
+2. `iPod Manager.app` in den Programme-Ordner ziehen
+3. **Erstes Öffnen:** Rechtsklick auf die App → **Öffnen** → im Dialog nochmal **Öffnen** klicken  
+   *(macOS blockiert Apps aus dem Internet beim ersten Start — danach geht Doppelklick normal)*
+
+### Aus dem Quellcode starten
+
+1. Diesen Ordner irgendwo auf dem Computer speichern
+2. `build_app.command` doppelklicken — baut die App automatisch
+
+**Hinweis:** Falls macOS meldet „konnte nicht überprüft werden, ob die Datei beschädigt ist":
+```
+xattr -cr build_app.command
+```
+im Terminal eingeben (du musst vorher `cd` in den Ordner machen), danach klappt der Doppelklick.
+
+**Voraussetzungen:** Python 3 (von python.org)
 
 ## App starten
 
