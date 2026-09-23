@@ -493,25 +493,29 @@ class iPodDB:
         _cb("Suche Playlist-Einträge…", 20)
         pls = self._playlist_sections(data)
 
-        # Collect all bytes ranges to remove: (offset, size)
-        removes = [(off, total)]  # mhit
+        # Collect bytes ranges to remove, tracked per playlist section
+        removes = [(off, total)]  # mhit always first
+        removes_per_section = []  # parallel list to pls: [(off, sz), ...]
         for ps in pls:
             mhyp_pos = ps["mhyp_total_off"] - 8
             mhyp_hdr_sz = struct.unpack_from("<I", data, mhyp_pos + 4)[0]
             mhyp_total = struct.unpack_from("<I", data, mhyp_pos + 8)[0]
             c = mhyp_pos + mhyp_hdr_sz
             end = mhyp_pos + mhyp_total
+            section_removes = []
             while c < end:
                 tag = data[c:c + 4]
                 if tag == b"mhip":
                     c_total = struct.unpack_from("<I", data, c + 8)[0]
                     if struct.unpack_from("<I", data, c + 24)[0] == track_id:
                         removes.append((c, c_total))
+                        section_removes.append((c, c_total))
                     c += c_total
                 elif tag == b"mhod":
                     c += struct.unpack_from("<I", data, c + 8)[0]
                 else:
                     break
+            removes_per_section.append(section_removes)
 
         _cb("Baue neue Datenbank…", 40)
         # Remove from highest offset downward
@@ -535,15 +539,12 @@ class iPodDB:
         sf = adj(self._mhsd_track_off) + 8
         struct.pack_into("<I", new_db, sf,
                          struct.unpack_from("<I", new_db, sf)[0] - total)
-        # Playlist size fields (only mhsd/mhyp total and mhyp tracks — not children)
-        for ps in pls:
-            mhip_removes_in_section = [r for r in removes[1:]
-                                        if r[0] >= ps["mhsd_total_off"]
-                                        and r[0] < ps["mhsd_total_off"] + 200000]
-            if not mhip_removes_in_section:
+        # Playlist size fields — use per-section tracking, not offset range guessing
+        for ps, section_removes in zip(pls, removes_per_section):
+            if not section_removes:
                 continue
-            sz_rem = sum(r[1] for r in mhip_removes_in_section)
-            cnt = len(mhip_removes_in_section)
+            sz_rem = sum(r[1] for r in section_removes)
+            cnt = len(section_removes)
             for fld in ("mhsd_total_off", "mhyp_total_off"):
                 f = adj(ps[fld])
                 struct.pack_into("<I", new_db, f,
